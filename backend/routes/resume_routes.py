@@ -1,10 +1,11 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException
-from fastapi.responses import JSONResponse
 import shutil, os, uuid, datetime
 from dotenv import load_dotenv
 from motor.motor_asyncio import AsyncIOMotorClient
 from resume_parser import extract_text_from_pdf, parse_resume_with_llm
 from services.recommendation.recommendation_engine import recommend_careers
+from services.resume.formatter import format_parsed_profile
+from services.resume.generator import generate_resume
 
 load_dotenv()
 
@@ -54,3 +55,17 @@ async def upload_resume(file: UploadFile = File(...)):
         if os.path.exists(path):
             os.remove(path)
         raise HTTPException(500, f"Error: {str(e)}")
+
+
+@router.post("/generate")
+async def generate_resume_from_profile(data: dict):
+    """Generate a professional resume text from a structured profile."""
+    formatted_profile = format_parsed_profile(data)
+    if not formatted_profile["skills"] and not formatted_profile["current_role"]:
+        raise HTTPException(400, "Provide at least skills or current role for resume generation")
+
+    try:
+        resume_text = generate_resume(formatted_profile)
+        return {"resume": resume_text, "profile": formatted_profile}
+    except Exception as e:
+        raise HTTPException(500, f"Error generating resume: {str(e)}")

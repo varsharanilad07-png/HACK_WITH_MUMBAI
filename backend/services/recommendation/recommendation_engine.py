@@ -98,6 +98,88 @@ def _get_career_embeddings() -> tuple[list[dict], np.ndarray]:
     return careers, embeddings
 
 
+@lru_cache(maxsize=1)
+def _build_skill_graph() -> tuple[list[dict], dict[str, set[int]], list[set[str]]]:
+    """Build a simple career-skill graph for graph-based recommendation scoring."""
+    careers = load_career_database()
+    skill_to_careers: dict[str, set[int]] = {}
+    career_skill_sets: list[set[str]] = []
+
+    for idx, career in enumerate(careers):
+        skills = {skill.lower() for skill in career["required_skills"]}
+        career_skill_sets.append(skills)
+        for skill in skills:
+            skill_to_careers.setdefault(skill, set()).add(idx)
+
+    return careers, skill_to_careers, career_skill_sets
+
+
+def _skill_similarity(skill_a: str, skill_b: str, skill_to_careers: dict[str, set[int]]) -> float:
+    """Compute a simple similarity between two skills using shared career co-occurrence."""
+    careers_a = skill_to_careers.get(skill_a, set())
+    careers_b = skill_to_careers.get(skill_b, set())
+    if not careers_a or not careers_b:
+        return 0.0
+    intersection = careers_a & careers_b
+    union = careers_a | careers_b
+    return len(intersection) / len(union) if union else 0.0
+
+
+def _graph_relevance(
+    user_skills: list[str],
+    career_skills: list[str],
+    skill_to_careers: dict[str, set[int]],
+) -> float:
+    """Score how strongly a career connects to the user's skill graph."""
+    user_lower = {s.lower() for s in user_skills}
+    career_set = {s.lower() for s in career_skills}
+    direct_matches = len(user_lower & career_set)
+    direct_score = direct_matches / max(1, len(career_set))
+
+    related_sum = 0.0
+    for req_skill in career_set:
+        if req_skill in user_lower:
+            continue
+        best_sim = 0.0
+        for user_skill in user_lower:
+            sim = _skill_similarity(req_skill, user_skill, skill_to_careers)
+            if sim > best_sim:
+                best_sim = sim
+        if best_sim > 0.12:
+            related_sum += best_sim
+
+    related_score = related_sum / max(1, len(career_set))
+    return min(1.0, direct_score + 0.5 * related_score)
+
+
+def _top_graph_reasons(
+    user_skills: list[str],
+    career_skills: list[str],
+    skill_to_careers: dict[str, set[int]],
+    max_reasons: int = 3,
+) -> list[str]:
+    """Build short graph-based explanation links for a career recommendation."""
+    user_lower = {s.lower() for s in user_skills}
+    reasons: list[tuple[float, str, str]] = []
+
+    for req_skill in career_skills:
+        req_lower = req_skill.lower()
+        if req_lower in user_lower:
+            continue
+        best_sim = 0.0
+        best_user = ""
+        for user_skill in user_lower:
+            sim = _skill_similarity(req_lower, user_skill, skill_to_careers)
+            if sim > best_sim:
+                best_sim = sim
+                best_user = user_skill
+        if best_sim > 0.12:
+            reasons.append((best_sim, req_skill, best_user))
+
+    reasons.sort(reverse=True, key=lambda item: item[0])
+    return [f"{req} ≈ {user}" for _, req, user in reasons[:max_reasons]]
+
+
 def recommend_careers(parsed_profile: dict, top_n: int = 5) -> list[dict]:
     """
     Match user profile against IT/Tech O*NET careers using cosine similarity.
@@ -117,14 +199,28 @@ def recommend_careers(parsed_profile: dict, top_n: int = 5) -> list[dict]:
     user_vec = _embed(user_text).reshape(1, -1)
 
     careers, career_embeddings = _get_career_embeddings()
+    _, skill_to_careers, career_skill_sets = _build_skill_graph()
     scores = cosine_similarity(user_vec, career_embeddings)[0]
 
-    top_indices = np.argsort(scores)[::-1][:top_n * 3]
+    # Pick a larger buffer of high-semantic candidates, then refine with graph relevance.
+    top_indices = np.argsort(scores)[::-1][: top_n * 6]
+
+    scored_results: list[tuple[float, int]] = []
+    for idx in top_indices:
+        semantic_score = float(scores[idx])
+        graph_score = _graph_relevance(
+            user_skills,
+            careers[idx]["required_skills"],
+            skill_to_careers,
+        )
+        combined_score = round(min(1.0, semantic_score * 0.7 + graph_score * 0.3) * 100, 1)
+        scored_results.append((combined_score, idx))
+
+    scored_results.sort(reverse=True, key=lambda pair: pair[0])
 
     results = []
     seen_titles = set()
-
-    for idx in top_indices:
+    for combined_score, idx in scored_results:
         career = careers[idx]
         title = career["title"]
 
@@ -132,19 +228,26 @@ def recommend_careers(parsed_profile: dict, top_n: int = 5) -> list[dict]:
             continue
         seen_titles.add(title)
 
-        match_score = float(scores[idx])
         skill_gap = _compute_skill_gap(user_skills, career["required_skills"])
         matched = _compute_matched(user_skills, career["required_skills"])
+        graph_reasons = _top_graph_reasons(
+            user_skills,
+            career["required_skills"],
+            skill_to_careers,
+        )
 
         results.append({
             "title": title,
             "onet_code": career["onet_code"],
             "description": career.get("description", "")[:200],
-            "match_score": round(match_score * 100, 1),
+            "match_score": combined_score,
+            "semantic_score": round(float(scores[idx]) * 100, 1),
+            "graph_score": round(_graph_relevance(user_skills, career["required_skills"], skill_to_careers) * 100, 1),
+            "graph_reason": graph_reasons,
             "skill_gap": skill_gap[:8],
             "matched_skills": matched[:6],
             "required_skills": career["required_skills"][:10],
-            "inferred_domain": domain_prefix,   # useful for debugging / frontend display
+            "inferred_domain": domain_prefix,
         })
 
         if len(results) >= top_n:
