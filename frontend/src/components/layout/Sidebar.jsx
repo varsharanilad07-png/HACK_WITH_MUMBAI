@@ -12,7 +12,7 @@ import {
 
 const navItems = [
   { to: "/dashboard", label: "Dashboard", icon: Gauge },
-  { to: "/resume", label: "Resume Upload", icon: FileUp },
+  { to: "/resume", label: "Resume Generator", icon: FileUp },
   { to: "/skills", label: "Parsed Skills", icon: BrainCircuit },
   { to: "/recommendations", label: "Recommendations", icon: Sparkles },
   { to: "/skill-gap", label: "Skill Gap", icon: GitCompare },

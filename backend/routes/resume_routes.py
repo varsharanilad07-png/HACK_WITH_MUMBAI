@@ -1,7 +1,10 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi.responses import StreamingResponse
+from io import BytesIO
 import shutil, os, uuid, datetime
 from dotenv import load_dotenv
 from motor.motor_asyncio import AsyncIOMotorClient
+from docx import Document
 from resume_parser import extract_text_from_pdf, parse_resume_with_llm
 from services.recommendation.recommendation_engine import recommend_careers
 from services.resume.formatter import format_parsed_profile
@@ -69,3 +72,43 @@ async def generate_resume_from_profile(data: dict):
         return {"resume": resume_text, "profile": formatted_profile}
     except Exception as e:
         raise HTTPException(500, f"Error generating resume: {str(e)}")
+
+
+@router.post("/generate/word")
+async def generate_resume_word_from_profile(data: dict):
+    """Generate a downloadable Word document from a structured profile."""
+    formatted_profile = format_parsed_profile(data)
+    if not formatted_profile["skills"] and not formatted_profile["current_role"]:
+        raise HTTPException(400, "Provide at least skills or current role for resume generation")
+
+    try:
+        resume_text = generate_resume(formatted_profile)
+        buffer = _build_resume_docx_buffer(resume_text)
+        headers = {"Content-Disposition": 'attachment; filename="generated_resume.docx"'}
+        return StreamingResponse(
+            buffer,
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers=headers,
+        )
+    except Exception as e:
+        raise HTTPException(500, f"Error generating resume word file: {str(e)}")
+
+
+def _build_resume_docx_buffer(resume_text: str) -> BytesIO:
+    document = Document()
+    for line in resume_text.splitlines():
+        text = line.strip()
+        if not text:
+            document.add_paragraph("")
+            continue
+        if text == "---":
+            continue
+        if text.isupper() and len(text) > 3:
+            document.add_heading(text, level=1)
+            continue
+        document.add_paragraph(text)
+
+    buffer = BytesIO()
+    document.save(buffer)
+    buffer.seek(0)
+    return buffer

@@ -29,6 +29,8 @@ export const resumeApi = {
       headers: { "Content-Type": "multipart/form-data" },
     });
   },
+  generate: (payload) => api.post("/resume/generate", payload),
+  generateWord: (payload) => api.post("/resume/generate/word", payload, { responseType: "blob" }),
 };
 
 export const careerApi = {

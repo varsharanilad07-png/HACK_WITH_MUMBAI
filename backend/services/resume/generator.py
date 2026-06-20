@@ -1,128 +1,212 @@
-import os
-from groq import Groq
-from dotenv import load_dotenv
-
-load_dotenv()
-_client = Groq(api_key=os.getenv("GROQ_API_KEY", ""))
+"""Resume generator that formats structured profile data into a ready-to-use CV."""
 
 
 def generate_resume(profile: dict) -> str:
     """Generate a professional resume text from a structured profile."""
-    name = profile.get("name", "Unknown")
-    phone = profile.get("phone", "")
-    email = profile.get("email", "")
-    linkedin = profile.get("linkedin", "")
-    github = profile.get("github", "")
-    current_role = profile.get("current_role", "")
-    education = profile.get("education", "")
-    skills = profile.get("skills", [])
-    industries = profile.get("industries", [])
-    interests = profile.get("interests", [])
-    achievements = profile.get("achievements", [])
-    projects = profile.get("projects", [])
-    experience_entries = profile.get("experience", [])
+    name = _first_non_empty(profile.get("name"), "Unknown")
+    contact_line = _format_contact_line(profile)
+    summary = _build_summary(profile)
+    education_block = _format_education(profile.get("education"), profile)
+    experience_block = _format_experience(profile.get("experience", []))
+    projects_block = _format_projects(profile.get("projects", []))
+    skills_block = _format_skills(profile)
+    achievements_block = _format_bullets(profile.get("achievements", []))
 
-    contact_line = " | ".join([item for item in [phone, email, linkedin, github] if item])
-    if contact_line:
-        contact_line = contact_line.strip()
+    sections = [
+        name,
+        contact_line,
+        "",
+        "---",
+        "",
+        "PROFESSIONAL SUMMARY",
+        summary,
+        "",
+        "---",
+        "",
+        "EDUCATION",
+        education_block,
+        "",
+        "---",
+        "",
+        "EXPERIENCE",
+        experience_block,
+        "",
+        "---",
+        "",
+        "PROJECTS",
+        projects_block,
+        "",
+        "---",
+        "",
+        "TECHNICAL SKILLS",
+        skills_block,
+        "",
+        "---",
+        "",
+        "ACHIEVEMENTS",
+        achievements_block,
+    ]
 
-    prompt = f"""
-You are a professional resume writer. Create a resume in plain text using the exact format below.
-Use the provided profile information. If any section details are missing, omit only the missing lines, but keep the section headings.
-Do not include any extra commentary or markdown formatting.
+    return "\n".join(sections).strip()
 
-Resume output format:
-Name
-phone | email | linkedin | github
 
----
+def _format_contact_line(profile: dict) -> str:
+    parts = [
+        _first_non_empty(profile.get("phone"), ""),
+        _first_non_empty(profile.get("email"), ""),
+        _first_non_empty(profile.get("linkedin"), ""),
+        _first_non_empty(profile.get("github"), ""),
+    ]
+    parts = [part for part in parts if part]
+    return " | ".join(parts) if parts else ""
 
-PROFESSIONAL SUMMARY
-<2-3 concise sentences summarising the candidate's strengths, experience, and technical focus>
 
----
+def _build_summary(profile: dict) -> str:
+    summary = _first_non_empty(profile.get("summary"), "")
+    if summary:
+        return summary
 
-EDUCATION
-<Institution>  
-- <Degree / Program>  
-- <Score / CGPA / Grade>
-
-<Institution>  
-- <Degree / Program or qualification>  
-- <Score / Grade>
-
----
-
-EXPERIENCE
-<Title> — <Company>  
-<Date range>  
-- <Achievement bullet>
-- <Achievement bullet>
-
-<Title> — <Company>  
-<Date range>  
-- <Achievement bullet>
-- <Achievement bullet>
-
----
-
-PROJECTS
-<Project name> — <Tech stack>  
-- <Achievement bullet>
-- <Achievement bullet>
-
-<Project name> — <Tech stack>  
-- <Achievement bullet>
-- <Achievement bullet>
-
----
-
-TECHNICAL SKILLS
-<comma separated skills and tools>
-
----
-
-ACHIEVEMENTS
-- <Achievement bullet>
-- <Achievement bullet>
-"""
-
-    profile_data = {
-        "name": name,
-        "current_role": current_role,
-        "education": education,
-        "skills": skills,
-        "industries": industries,
-        "interests": interests,
-        "achievements": achievements,
-        "projects": projects,
-        "experience": experience_entries,
-    }
-
-    supplemental = f"Name: {name}\n"
-    if contact_line:
-        supplemental += f"Contact: {contact_line}\n"
-    if current_role:
-        supplemental += f"Current role: {current_role}\n"
-    if education:
-        supplemental += f"Education: {education}\n"
-    if skills:
-        supplemental += f"Skills: {', '.join(skills)}\n"
-    if industries:
-        supplemental += f"Industries: {', '.join(industries)}\n"
-    if interests:
-        supplemental += f"Interests: {', '.join(interests)}\n"
-    if achievements:
-        supplemental += f"Achievements: {', '.join(achievements)}\n"
-    if projects:
-        supplemental += f"Projects: {', '.join(projects)}\n"
-    if experience_entries:
-        supplemental += f"Experience: {experience_entries}\n"
-
-    response = _client.chat.completions.create(
-        messages=[{"role": "user", "content": prompt + "\n\n" + supplemental}],
-        model="llama-3.3-70b-versatile",
-        max_tokens=500,
-        temperature=0.2,
+    name = _first_non_empty(profile.get("name"), "the candidate")
+    current_role = _first_non_empty(profile.get("current_role"), "aspiring IT professional")
+    skills = _as_list(profile.get("skills"))
+    interests = _as_list(profile.get("interests"))
+    focus_items = skills[:3] or interests[:3]
+    focus_text = ", ".join(focus_items) if focus_items else "software and career development"
+    return (
+        f"{name} is a {current_role} with a strong interest in {focus_text}. "
+        f"The profile reflects hands-on experience in technology, problem solving, and continuous learning."
     )
-    return response.choices[0].message.content.strip()
+
+
+def _format_education(education, profile: dict) -> str:
+    entries = _normalize_section_entries(education)
+    if not entries:
+        entries = _normalize_section_entries(profile.get("education_details"))
+
+    if not entries and isinstance(education, str) and education.strip():
+        entries = [{"institution": education.strip()}]
+
+    if not entries:
+        return "- Not specified"
+
+    blocks = []
+    for entry in entries:
+        if isinstance(entry, str):
+            text = entry.strip()
+            if text:
+                blocks.append(text)
+            continue
+
+        institution = _first_non_empty(entry.get("institution"), entry.get("school"), entry.get("college"), entry.get("name"), "Not specified")
+        program = _first_non_empty(entry.get("degree"), entry.get("qualification"), entry.get("program"), entry.get("course"), entry.get("title"))
+        score = _first_non_empty(entry.get("score"), entry.get("cgpa"), entry.get("grade"), entry.get("percentage"), entry.get("result"))
+
+        lines = [institution]
+        if program:
+            lines.append(f"- {program}")
+        if score:
+            lines.append(f"- {score}")
+        blocks.append("\n".join(lines))
+
+    return "\n\n".join(blocks)
+
+
+def _format_experience(experience) -> str:
+    entries = _normalize_section_entries(experience)
+    if not entries:
+        return "- Not specified"
+
+    blocks = []
+    for entry in entries:
+        if isinstance(entry, str):
+            blocks.append(entry.strip())
+            continue
+
+        title = _first_non_empty(entry.get("title"), entry.get("role"), entry.get("position"), entry.get("name"), "")
+        company = _first_non_empty(entry.get("company"), entry.get("organization"), entry.get("employer"), "")
+        date_range = _first_non_empty(entry.get("date_range"), entry.get("duration"), entry.get("dates"), entry.get("period"), "")
+        bullets = _as_list(entry.get("bullets") or entry.get("achievements") or entry.get("responsibilities") or entry.get("details"))
+
+        lines = []
+        header = f"{title} — {company}" if company else title or "Experience"
+        lines.append(header)
+        if date_range:
+            lines.append(date_range)
+        if bullets:
+            lines.extend(f"- {bullet}" for bullet in bullets)
+        else:
+            lines.append("- Not specified")
+        blocks.append("\n".join(lines))
+
+    return "\n\n".join(blocks)
+
+
+def _format_projects(projects) -> str:
+    entries = _normalize_section_entries(projects)
+    if not entries:
+        return "- Not specified"
+
+    blocks = []
+    for entry in entries:
+        if isinstance(entry, str):
+            blocks.append(entry.strip())
+            continue
+
+        name = _first_non_empty(entry.get("name"), entry.get("title"), entry.get("project"), "")
+        tech_stack = _first_non_empty(entry.get("tech_stack"), entry.get("stack"), entry.get("technologies"), entry.get("tools"), "")
+        bullets = _as_list(entry.get("bullets") or entry.get("achievements") or entry.get("details") or entry.get("points"))
+
+        lines = []
+        header = f"{name} — {tech_stack}" if tech_stack else name or "Project"
+        lines.append(header)
+        if bullets:
+            lines.extend(f"- {bullet}" for bullet in bullets)
+        else:
+            lines.append("- Not specified")
+        blocks.append("\n".join(lines))
+
+    return "\n\n".join(blocks)
+
+
+def _format_skills(profile: dict) -> str:
+    grouped_skills = _as_list(profile.get("skills"))
+    industries = _as_list(profile.get("industries"))
+    interests = _as_list(profile.get("interests"))
+    extras = [skill for skill in industries + interests if skill not in grouped_skills]
+    all_skills = grouped_skills + extras
+    if not all_skills:
+        return "Not specified"
+    return ", ".join(all_skills)
+
+
+def _format_bullets(value) -> str:
+    bullets = _as_list(value)
+    if not bullets:
+        return "- Not specified"
+    return "\n".join(f"- {bullet}" for bullet in bullets)
+
+
+def _normalize_section_entries(value) -> list:
+    if isinstance(value, list):
+        return value
+    if value:
+        return [value]
+    return []
+
+
+def _as_list(value) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str) and value.strip():
+        return [part.strip() for part in value.split("\n") if part.strip()]
+    return []
+
+
+def _first_non_empty(*values) -> str:
+    for value in values:
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return ""

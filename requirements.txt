@@ -12,6 +12,7 @@ groq
 motor
 joblib
 python-dotenv
+python-docx
 argon2-cffi>=21.3.0
 python-jose[cryptography]
 pydantic[email]

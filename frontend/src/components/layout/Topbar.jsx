@@ -28,6 +28,12 @@ export default function Topbar() {
           <input className="w-full bg-transparent text-sm outline-none placeholder:text-slate-500" placeholder="Search roles, skills, courses" />
         </div>
         <div className="flex items-center gap-2">
+          <button
+            className="focus-ring hidden rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-slate-950 hover:opacity-90 md:inline-flex"
+            onClick={() => navigate("/resume")}
+          >
+            Generate Resume
+          </button>
           <button className="focus-ring hidden h-10 w-10 place-items-center rounded-lg border border-white/10 bg-white/5 text-slate-300 hover:bg-white/10 sm:grid" aria-label="Notifications">
             <Bell size={18} />
           </button>
